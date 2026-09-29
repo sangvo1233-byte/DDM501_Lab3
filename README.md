@@ -1,6 +1,6 @@
 # Lab 3: Testing & CI/CD for ML Systems
 
-![CI Pipeline](https://github.com/<your-github-user>/<repo-name>/actions/workflows/ci.yml/badge.svg)
+![CI Pipeline](https://github.com/sangvo1233-byte/DDM501_Lab3/actions/workflows/ci.yml/badge.svg)
 
 ## Overview
 
@@ -167,7 +167,10 @@ Complete the following files:
   cached.
 - **CD** (`.github/workflows/cd.yml`, bonus): on a `v*` tag it builds and pushes to GHCR (using `GITHUB_TOKEN`,
   so no secrets are needed), creates a GitHub Release, deploys to `staging` with a smoke test, then `production`
-  (add required reviewers to the environment for a manual approval gate).
+  (add required reviewers to the environment for a manual approval gate). **This part is a demonstration:** the
+  image build and push, the release and the staging smoke test are real steps, but the production job only
+  `echo`s, because the course provides no production target. Replace that step with the real deploy command
+  (`kubectl set image`, `gcloud run deploy` and so on) when one exists.
 - **Pre-commit**: hygiene hooks, black, isort, flake8, mypy, and fast unit tests.
 
 ### Fixes to the starter
