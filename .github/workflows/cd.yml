@@ -1,0 +1,123 @@
+# =============================================================================
+# CD Pipeline for Movie Rating API
+# DDM501 - Lab 3: Testing & CI/CD
+#
+# Triggered by a version tag (v1.0.0, v1.2.3 ...):
+#   build-and-push (GHCR) -> deploy-staging -> deploy-production (approval)
+#
+# The image goes to GitHub Container Registry using the built-in GITHUB_TOKEN,
+# so the pipeline needs no extra secret to run.
+# =============================================================================
+name: CD Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Image name (registry paths must be lowercase)
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/movie-rating-api" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Train model (baked into the image)
+        run: |
+          pip install -r requirements.txt
+          echo y | python scripts/train_model.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    environment: staging
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy and smoke test
+        run: |
+          IMAGE="${{ needs.build-and-push.outputs.image }}:latest"
+          echo "Deploying $IMAGE to staging"
+          docker run -d -p 8000:8000 --name staging "$IMAGE"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && break
+            sleep 2
+          done
+          curl -sf -X POST http://localhost:8000/predict \
+            -H 'Content-Type: application/json' \
+            -d '{"user_id":"196","movie_id":"242"}'
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    # Add required reviewers to the "production" environment
+    # (Settings -> Environments) to turn this into a manual approval gate.
+    environment: production
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Promoting ${{ needs.build-and-push.outputs.image }}:${{ github.ref_name }}"
+          # Real target goes here: kubectl set image / gcloud run deploy / az webapp ...
